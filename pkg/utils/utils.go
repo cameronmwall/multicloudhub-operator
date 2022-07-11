@@ -473,13 +473,15 @@ func appendIfMissing(slice []corev1.EnvVar, s corev1.EnvVar) []corev1.EnvVar {
 // SetDefaultComponents returns true if changes are made
 func SetDefaultComponents(m *operatorsv1.MultiClusterHub) bool {
 	updated := false
-	for _, c := range operatorsv1.DefaultEnabledComponents {
+	defaultEnabledComponents := operatorsv1.GetDefaultEnabledComponents()
+	defaultDisabledComponents := operatorsv1.GetDefaultDisabledComponents()
+	for _, c := range defaultEnabledComponents {
 		if !m.ComponentPresent(c) {
 			m.Enable(c)
 			updated = true
 		}
 	}
-	for _, c := range operatorsv1.DefaultDisabledComponents {
+	for _, c := range defaultDisabledComponents {
 		if !m.ComponentPresent(c) {
 			m.Disable(c)
 			updated = true
