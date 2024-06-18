@@ -58,12 +58,20 @@ def main(args):
         logging.info("Bundles updated successfully.")
     
     elif args.update_charts:
-        logging.info("Preparing to update bundles...")
+        logging.info("Preparing to update charts...")
         operation_script = "generate-charts.py"
         operation_args = "--destination pkg/templates/"
 
         prepare_operation(script_dir, operation_script, operation_args)
-        logging.info("Bundles updated successfully.")
+        logging.info("charts updated successfully.")
+    
+    elif args.copy_charts:
+        logging.info("Preparing to copy charts...")
+        operation_script = "move-charts.py"
+        operation_args = "--destination pkg/templates/"
+
+        prepare_operation(script_dir, operation_script, operation_args)
+        logging.info("Charts copied successfully.")
 
     elif args.update_commits:
         logging.info("Preparing to update commit SHAs...")
@@ -85,6 +93,7 @@ if __name__ == "__main__":
     parser.add_argument("--lint-bundles", action="store_true", help="Perform linting for operator bundles")
     parser.add_argument("--update-bundles", action="store_true", help="Regenerate operator bundles")
     parser.add_argument("--update-charts", action="store_true", help="Regenerate operator charts")
+    parser.add_argument("--copy-charts", action="store_true", help="Regenerate operator charts")
 
     parser.add_argument("--update-commits", action="store_true", help="Regenerate operator bundles with commit SHA")
 
