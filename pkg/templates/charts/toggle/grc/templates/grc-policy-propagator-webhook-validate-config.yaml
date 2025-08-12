@@ -23,4 +23,4 @@ webhooks:
     - CREATE
     resources:
     - policies
-  sideEffects: None
+  sideEffects: Nonex
