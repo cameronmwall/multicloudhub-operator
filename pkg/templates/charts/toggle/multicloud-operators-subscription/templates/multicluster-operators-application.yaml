@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: multicluster-operators-application
+  namespace: '{{ .Values.global.namespace }}'
 spec:
   replicas: 1
   selector:
@@ -91,6 +92,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /tmp
           name: tmp
@@ -148,6 +150,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /tmp
           name: tmp
@@ -210,6 +213,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /tmp
           name: tmp

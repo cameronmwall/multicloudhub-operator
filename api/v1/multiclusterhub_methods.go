@@ -23,6 +23,11 @@ const (
 	ClusterLifecycle          string = "cluster-lifecycle"
 	ClusterPermission         string = "cluster-permission"
 	Console                   string = "console"
+	EdgeManager               string = "edge-manager"
+	EdgeManagerPreview        string = "edge-manager-preview"
+	MTVIntegrationsPreview    string = "mtv-integrations-preview"
+	FineGrainedRbac           string = "fine-grained-rbac"
+	FineGrainedRbacPreview    string = "fine-grained-rbac-preview"
 	GRC                       string = "grc"
 	Insights                  string = "insights"
 	ManagementIngress         string = "management-ingress"
@@ -30,7 +35,6 @@ const (
 	MultiClusterObservability string = "multicluster-observability"
 	Repo                      string = "multiclusterhub-repo"
 	Search                    string = "search"
-	FlightControl             string = "flight-control-preview"
 	SiteConfig                string = "siteconfig"
 	SubmarinerAddon           string = "submariner-addon"
 	Volsync                   string = "volsync"
@@ -68,13 +72,15 @@ var MCHComponents = []string{
 	ClusterLifecycle,
 	ClusterPermission,
 	Console,
+	EdgeManagerPreview,
+	FineGrainedRbacPreview,
+	MTVIntegrationsPreview,
 	GRC,
 	Insights,
 	MultiClusterEngine, // Adding MCE component to ensure that the component is validated by the webhook.
 	MCH,                // Adding MCH component to ensure legacy resources are cleaned up properly.
 	MultiClusterObservability,
 	Search,
-	FlightControl,
 	SiteConfig,
 	SubmarinerAddon,
 	Volsync,
@@ -110,6 +116,34 @@ var MCECRDs = []ResourceGVK{
 		Version: "v1alpha1",
 		Kind:    "ClusterManagementAddOn",
 		Name:    "clustermanagementaddons.addon.open-cluster-management.io",
+	},
+	{
+		Group:   "addon.open-cluster-management.io",
+		Version: "v1alpha1",
+		Kind:    "AddOnTemplate",
+		Name:    "addontemplates.addon.open-cluster-management.io",
+	},
+}
+
+// resources to check for sts enabled or not
+var RequiredSTSCRDs = []ResourceGVK{
+	{
+		Group:   "config.openshift.io",
+		Version: "v1",
+		Kind:    "Infrastructure",
+		Name:    "infrastructures.config.openshift.io",
+	},
+	{
+		Group:   "config.openshift.io",
+		Version: "v1",
+		Kind:    "Authentication",
+		Name:    "authentications.config.openshift.io",
+	},
+	{
+		Group:   "operator.openshift.io",
+		Version: "v1",
+		Kind:    "CloudCredential",
+		Name:    "cloudcredentials.operator.openshift.io",
 	},
 }
 
@@ -177,8 +211,10 @@ It is expected to be used to get a list of components that are disabled by defau
 func GetDefaultDisabledComponents() ([]string, error) {
 	defaultDisabledComponents := []string{
 		ClusterBackup,
+		EdgeManagerPreview,
+		FineGrainedRbacPreview,
 		SiteConfig,
-		FlightControl,
+		MTVIntegrationsPreview,
 	}
 	return defaultDisabledComponents, nil
 }

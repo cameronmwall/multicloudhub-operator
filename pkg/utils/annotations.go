@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	operatorsv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 var (
@@ -75,9 +76,32 @@ var (
 
 	/*
 		AnnotationHubSize is an annotation used in multiclusterhub to specify a hub size that can be
-		used by other components
+		used by other components.
 	*/
 	AnnotationHubSize = "installer.open-cluster-management.io/hub-size"
+
+	/*
+		AnnotationDefaultStorageClass is an annotation used to set the default storage class name for multiclusterhub
+		operand resources to use.
+	*/
+	AnnotationDefaultStorageClass = "installer.open-cluster-management.io/default-storage-class"
+
+	/*
+		AnnotationKubeDefaultStorageClass is an annotation used in the cluster to determine the default storage class
+		resource.
+	*/
+	AnnotationKubeDefaultStorageClass = "storageclass.kubernetes.io/is-default-class"
+
+	/*
+		AnnotationFineGrainedRbac is an annotation used in the cluster to determine if fine grained rbac is enabled.
+	*/
+	AnnotationFineGrainedRbac = "fine-grained-rbac-preview"
+
+	/*
+		AnnotationEditable is an annotation used on specific resources deployed by the hub to mark them as able
+		to be ended by customer without being overridden.
+	*/
+	AnnotationEditable = "installer.open-cluster-management.io/is-editable"
 )
 
 /*
@@ -103,6 +127,19 @@ func GetHubSize(instance *operatorsv1.MultiClusterHub) operatorsv1.HubSize {
 IsAnnotationTrue checks if a specific annotation key in the given instance is set to "true".
 */
 func IsAnnotationTrue(instance *operatorsv1.MultiClusterHub, annotationKey string) bool {
+	a := instance.GetAnnotations()
+	if a == nil {
+		return false
+	}
+
+	value := strings.EqualFold(a[annotationKey], "true")
+	return value
+}
+
+/*
+IsAnnotationTrue checks if a specific annotation key in the given instance is set to "true".
+*/
+func IsTemplateAnnotationTrue(instance *unstructured.Unstructured, annotationKey string) bool {
 	a := instance.GetAnnotations()
 	if a == nil {
 		return false
@@ -169,6 +206,14 @@ func getAnnotationOrDefaultForMap(old, new map[string]string, primaryKey, deprec
 	}
 
 	return oldValue == newValue
+}
+
+/*
+GetDefaultStorageClassOverride returns the name of the storage class that MCH should use as the
+default override.
+*/
+func GetDefaultStorageClassOverride(instance *operatorsv1.MultiClusterHub) string {
+	return getAnnotation(instance, AnnotationDefaultStorageClass)
 }
 
 /*

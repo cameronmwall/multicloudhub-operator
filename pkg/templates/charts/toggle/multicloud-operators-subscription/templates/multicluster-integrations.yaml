@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: multicluster-integrations
+  namespace: '{{ .Values.global.namespace }}'
 spec:
   replicas: 1
   selector:
@@ -75,6 +76,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
       - command:
@@ -132,6 +134,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /etc/gitops-resources
           name: multicluster-integrations-syncresource
@@ -191,6 +194,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /etc/gitops-resources
           name: multicluster-integrations-syncresource

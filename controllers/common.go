@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 
 	consolev1 "github.com/openshift/api/operator/v1"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengineutils"
 	utils "github.com/stolostron/multiclusterhub-operator/pkg/utils"
 
 	operatorv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
@@ -53,6 +55,104 @@ type CacheSpec struct {
 	ManifestVersion     string
 	TemplateOverrides   map[string]string
 	TemplateOverridesCM string
+}
+
+func (r *MultiClusterHubReconciler) deleteEdgeManagerResources(ctx context.Context, m *operatorv1.MultiClusterHub) (ctrl.Result, error) {
+	// List of resource names and types to delete
+	resources := []struct {
+		kind      string
+		name      string
+		namespace string
+	}{
+		{"Secret", "flightctl-db-secret", m.GetNamespace()},
+		{"Secret", "flightctl-kv-secret", m.GetNamespace()},
+		{"PersistentVolumeClaim", "flightctl-kv-data-flightctl-kv-0", m.GetNamespace()},
+	}
+
+	// Delete Secrets
+	for _, resource := range resources[:2] {
+		err := r.deleteSecret(ctx, m, resource.name, resource.namespace)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Delete PersistentVolumeClaim
+	err := r.deletePVC(ctx, m, "flightctl-kv-data-flightctl-kv-0", m.GetNamespace())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Delete Pod with label
+	err = r.deletePodWithLabel(ctx, m, "flightctl.service=secrets-job", m.GetNamespace())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (r *MultiClusterHubReconciler) deleteSecret(ctx context.Context, m *operatorv1.MultiClusterHub, name, namespace string) error {
+	secret := &corev1.Secret{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, secret)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	err = r.Client.Delete(ctx, secret)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *MultiClusterHubReconciler) deletePVC(ctx context.Context, m *operatorv1.MultiClusterHub, name, namespace string) error {
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, pvc)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	err = r.Client.Delete(ctx, pvc)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *MultiClusterHubReconciler) deletePodWithLabel(ctx context.Context, m *operatorv1.MultiClusterHub, labelSelector, namespace string) error {
+	podList := &corev1.PodList{}
+
+	err := r.Client.List(ctx, podList, client.InNamespace(namespace), client.MatchingLabels{"flightctl.service": "secrets-job"})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, pod := range podList.Items {
+		err := r.Client.Delete(ctx, &pod)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *MultiClusterHubReconciler) ensureNoNamespace(m *operatorv1.MultiClusterHub, u *unstructured.Unstructured) (ctrl.Result, error) {
@@ -193,10 +293,10 @@ func (r *MultiClusterHubReconciler) ensureMultiClusterEngineCR(ctx context.Conte
 	}
 	mceannotations[mceutils.AnnotationHubSize] = string(utils.GetHubSize(m))
 
-	if m.Enabled(operatorv1.FlightControl) {
-		mceannotations[mceutils.AnnotationFlightEnabled] = "true"
+	if m.Enabled(operatorv1.EdgeManagerPreview) {
+		mceannotations[mceutils.AnnotationEdgeManagerEnabled] = "true"
 	} else {
-		mceannotations[mceutils.AnnotationFlightEnabled] = "false"
+		mceannotations[mceutils.AnnotationEdgeManagerEnabled] = "false"
 	}
 
 	// TODO: put this back later
@@ -385,7 +485,7 @@ func (r *MultiClusterHubReconciler) listCustomResources(m *operatorv1.MultiClust
 	}
 
 	var mce *unstructured.Unstructured
-	gotMCE, err := multiclusterengine.GetManagedMCE(context.Background(), r.Client)
+	gotMCE, err := multiclusterengineutils.GetManagedMCE(context.Background(), r.Client)
 	if err != nil || gotMCE == nil {
 		mce = nil
 	} else {
@@ -506,7 +606,7 @@ func (r *MultiClusterHubReconciler) ensureMultiClusterEngine(ctx context.Context
 // waitForMCE checks that MCE is in a running state and at the expected version.
 func (r *MultiClusterHubReconciler) waitForMCEReady(ctx context.Context) (ctrl.Result, error) {
 	// Wait for MCE to be ready
-	existingMCE, err := multiclusterengine.GetManagedMCE(ctx, r.Client)
+	existingMCE, err := multiclusterengineutils.GetManagedMCE(ctx, r.Client)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -744,12 +844,17 @@ func (r *MultiClusterHubReconciler) ensureSearchCR(m *operatorv1.MultiClusterHub
 			Name:      "search-v2-operator",
 			Namespace: m.Namespace,
 			Labels:    map[string]string{"cluster.open-cluster-management.io/backup": ""},
+			Annotations: map[string]string{
+				utils.AnnotationFineGrainedRbac: strconv.FormatBool(
+					m.Enabled(operatorv1.FineGrainedRbacPreview)),
+			},
 		},
 		Spec: searchv2v1alpha1.SearchSpec{
 			NodeSelector: m.Spec.NodeSelector,
 			Tolerations:  utils.GetTolerations(m),
 		},
 	}
+
 	force := true
 	err := r.Client.Patch(ctx, searchCR, client.Apply, &client.PatchOptions{Force: &force, FieldManager: "multiclusterhub-operator"})
 	if err != nil {

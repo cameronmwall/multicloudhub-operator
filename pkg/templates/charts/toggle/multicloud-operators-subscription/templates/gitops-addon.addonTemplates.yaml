@@ -29,9 +29,6 @@ spec:
               containers:
               - command:
                 - /usr/local/bin/gitopsaddon
-                - --leader-election-lease-duration=137s
-                - --leader-election-renew-deadline=107s
-                - --leader-election-retry-period=26s
                 env:
                 - name: GITOPS_OPERATOR_IMAGE
                   value: '{{ `{{GITOPS_OPERATOR_IMAGE}}` }}'
@@ -45,11 +42,28 @@ spec:
                   value: '{{ `{{REDIS_IMAGE}}` }}'
                 - name: RECONCILE_SCOPE
                   value: '{{ `{{RECONCILE_SCOPE}}` }}'
+                - name: ACTION
+                  value: '{{ `{{ACTION}}` }}'
                 image: '{{ .Values.global.imageOverrides.multicloud_integrations }}'
                 imagePullPolicy: IfNotPresent
                 name: gitops-addon
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+                  readOnlyRootFilesystem: true
+                  runAsNonRoot: true
+                volumeMounts:
+                - mountPath: /tmp
+                  name: tmp-volume
               serviceAccountName: gitops-addon
+              volumes:
+              - emptyDir: {}
+                name: tmp-volume
       - apiVersion: v1
+        imagePullSecrets:
+        - name: open-cluster-management-image-pull-credentials
         kind: ServiceAccount
         metadata:
           name: gitops-addon

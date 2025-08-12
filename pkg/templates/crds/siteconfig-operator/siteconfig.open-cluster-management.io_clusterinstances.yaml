@@ -15,6 +15,9 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.paused.timeSet
+      name: Paused
+      type: date
     - jsonPath: .status.conditions[?(@.type=='Provisioned')].reason
       name: ProvisionStatus
       type: string
@@ -288,7 +291,6 @@ spec:
                       - legacy
                       type: string
                     cpuArchitecture:
-                      default: x86_64
                       description: |-
                         CPUArchitecture is the software architecture of the node.
                         If it is not defined here then it is inheirited from the ClusterInstanceSpec.
@@ -315,6 +317,23 @@ spec:
                     hostName:
                       description: Hostname is the desired hostname for the host
                       type: string
+                    hostRef:
+                      description: HostRef is used to specify a reference to a BareMetalHost
+                        resource.
+                      properties:
+                        name:
+                          description: Name specifies the name of the referenced object.
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: Namespace specifies the namespace of the referenced
+                            object.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
                     ignitionConfigOverride:
                       description: |-
                         Json formatted string containing the user overrides for the host's ignition config
@@ -479,12 +498,19 @@ spec:
                         in which the keys of the data field represent the kind of the installation manifest(s).
                         Node-level templates are instantiated once for each node in the ClusterInstance CR.
                       items:
-                        description: TemplateRef is used to specify the installation
-                          CR templates
+                        description: |-
+                          TemplateRef is a reference to an installation Custom Resource (CR) template.
+                          It provides a way to specify the template to be used for an installation process.
                         properties:
                           name:
+                            description: Name specifies the name of the referenced
+                              object.
+                            minLength: 1
                             type: string
                           namespace:
+                            description: Namespace specifies the namespace of the
+                              referenced object.
+                            minLength: 1
                             type: string
                         required:
                         - name
@@ -622,12 +648,18 @@ spec:
                   in which the keys of the data field represent the kind of the installation manifest(s).
                   Cluster-level templates are instantiated once per cluster (ClusterInstance CR).
                 items:
-                  description: TemplateRef is used to specify the installation CR
-                    templates
+                  description: |-
+                    TemplateRef is a reference to an installation Custom Resource (CR) template.
+                    It provides a way to specify the template to be used for an installation process.
                   properties:
                     name:
+                      description: Name specifies the name of the referenced object.
+                      minLength: 1
                       type: string
                     namespace:
+                      description: Namespace specifies the namespace of the referenced
+                        object.
+                      minLength: 1
                       type: string
                   required:
                   - name
@@ -811,9 +843,87 @@ spec:
                 description: Track the observed generation to avoid unnecessary reconciles
                 format: int64
                 type: integer
+              paused:
+                description: |-
+                  Paused provides information about the pause annotation set by the controller
+                  to temporarily pause reconciliation of the ClusterInstance.
+                properties:
+                  reason:
+                    description: |-
+                      Reason provides an explanation for why the paused annotation was applied.
+                      This field may not be empty.
+                    maxLength: 32768
+                    type: string
+                  timeSet:
+                    description: TimeSet indicates when the paused annotation was
+                      applied.
+                    format: date-time
+                    type: string
+                required:
+                - reason
+                - timeSet
+                type: object
               reinstall:
                 description: Reinstall status information.
                 properties:
+                  conditions:
+                    description: List of conditions pertaining to reinstall requests.
+                    items:
+                      description: Condition contains details for one aspect of the
+                        current state of this API Resource.
+                      properties:
+                        lastTransitionTime:
+                          description: |-
+                            lastTransitionTime is the last time the condition transitioned from one status to another.
+                            This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                          format: date-time
+                          type: string
+                        message:
+                          description: |-
+                            message is a human readable message indicating details about the transition.
+                            This may be an empty string.
+                          maxLength: 32768
+                          type: string
+                        observedGeneration:
+                          description: |-
+                            observedGeneration represents the .metadata.generation that the condition was set based upon.
+                            For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                            with respect to the current state of the instance.
+                          format: int64
+                          minimum: 0
+                          type: integer
+                        reason:
+                          description: |-
+                            reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                            Producers of specific condition types may define expected values and meanings for this field,
+                            and whether the values are considered a guaranteed API.
+                            The value should be a CamelCase string.
+                            This field may not be empty.
+                          maxLength: 1024
+                          minLength: 1
+                          pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                          type: string
+                        status:
+                          description: status of the condition, one of True, False,
+                            Unknown.
+                          enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                          type: string
+                        type:
+                          description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                          maxLength: 316
+                          pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                          type: string
+                      required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                      type: object
+                    type: array
                   history:
                     description: |-
                       History maintains a record of all previous reinstallation attempts.
@@ -835,25 +945,45 @@ spec:
                             Generation specifies the generation of the ClusterInstance at the time of the reinstallation.
                             This value corresponds to the ReinstallSpec.Generation field associated with the reinstallation request.
                           type: string
-                        timestamp:
-                          description: Timestamp indicates the date and time when
-                            the reinstallation occurred.
+                        requestEndTime:
+                          description: RequestEndTime indicates the time at which
+                            SiteConfig completed processing the reinstall request.
+                          format: date-time
+                          type: string
+                        requestStartTime:
+                          description: RequestStartTime indicates the time at which
+                            SiteConfig was requested to reinstall.
                           format: date-time
                           type: string
                       required:
                       - clusterInstanceSpecDiff
                       - generation
-                      - timestamp
+                      - requestEndTime
+                      - requestStartTime
                       type: object
                     type: array
+                  inProgressGeneration:
+                    description: |-
+                      InProgressGeneration is the generation of the ClusterInstance that is being processed for reinstallation.
+                      It corresponds to the Generation field in ReinstallSpec and indicates the latest reinstall request that
+                      the controller is acting upon.
+                    type: string
                   observedGeneration:
                     description: |-
                       ObservedGeneration is the generation of the ClusterInstance that has been processed for reinstallation.
                       It corresponds to the Generation field in ReinstallSpec and indicates the latest reinstall request that
                       the controller has acted upon.
                     type: string
-                required:
-                - observedGeneration
+                  requestEndTime:
+                    description: RequestEndTime indicates the time at which SiteConfig
+                      completed processing the reinstall request.
+                    format: date-time
+                    type: string
+                  requestStartTime:
+                    description: RequestStartTime indicates the time at which SiteConfig
+                      was requested to reinstall.
+                    format: date-time
+                    type: string
                 type: object
             type: object
         type: object

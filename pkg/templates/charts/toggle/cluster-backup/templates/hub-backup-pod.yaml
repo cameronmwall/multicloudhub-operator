@@ -30,35 +30,11 @@ spec:
         spec:
           remediationAction: enforce
           severity: high
-          object-templates:
-            - complianceType: musthave
-              objectDefinition:
-                apiVersion: v1
-                kind: ConfigMap
-                metadata:
-                  name: acm-dr-virt-restore-config
-                  namespace: open-cluster-management-backup
-                data:
-                  clusterID_restoreName: ""
-                  clusterID_vmsUID: "uid1 uid2"
-                  clusterID_backupName: backupName
-            - complianceType: musthave
-              objectDefinition:
-                apiVersion: v1
-                kind: ConfigMap
-                metadata:
-                  name: acm-dr-virt-schedule-cron
-                  namespace: open-cluster-management-backup
-                data:
-                  hourly: "0 */1 * * *"
-                  every_2_hours: "0 */2 * * *"
-                  every_3_hours: "0 */3 * * *"
-                  every_4_hours: "0 */4 * * *"
-                  every_5_hours: "0 */5 * * *"
-                  every_6_hours: "0 */6 * * *"
-                  twice_a_day: "0 */12 * * *"
-                  daily_8am: "0 8 * * *"
-                  every_sunday: "0 0 * * 0"
+          object-templates-raw: |
+            {{ `{{hub $config_name := "acm-dr-virt-config" hub}}` }}
+            {{ `{{hub $config_file := lookup "v1" "ConfigMap" "" $config_name hub}}` }}
+            {{ `{{hub $config_file_exists := eq $config_file.metadata.name $config_name hub}}` }}
+            {{ `{{hub if not $config_file_exists hub}}` }}
             - complianceType: musthave
               recordDiff: InStatus
               objectDefinition:
@@ -69,7 +45,6 @@ spec:
                   namespace: open-cluster-management-backup
                 data:
                   backupNS: open-cluster-management-backup
-                  channel: stable-1.4
                   credentials_hub_secret_name: cloud-credentials
                   credentials_name: cloud-credentials
                   dpa_name: dpa-vm-policy
@@ -104,7 +79,7 @@ spec:
                     },
                     velero: {
                       defaultPlugins: [
-                        csi,       
+                        csi,
                         openshift,
                         kubevirt,
                         aws
@@ -112,6 +87,35 @@ spec:
                     }
                   },
                 }"
+            {{ `{{hub end hub}}` }}
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: acm-dr-virt-restore-config
+                  namespace: open-cluster-management-backup
+                data:
+                  clusterID_restoreName: ""
+                  clusterID_vmsUID: "uid1 uid2"
+                  clusterID_backupName: backupName
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: acm-dr-virt-schedule-cron
+                  namespace: open-cluster-management-backup
+                data:
+                  hourly: "0 */1 * * *"
+                  every_2_hours: "0 */2 * * *"
+                  every_3_hours: "0 */3 * * *"
+                  every_4_hours: "0 */4 * * *"
+                  every_5_hours: "0 */5 * * *"
+                  every_6_hours: "0 */6 * * *"
+                  twice_a_day: "0 */12 * * *"
+                  daily_8am: "0 8 * * *"
+                  every_sunday: "0 0 * * 0"
     - objectDefinition:
         apiVersion: policy.open-cluster-management.io/v1
         kind: ConfigurationPolicy
@@ -410,7 +414,17 @@ spec:
           remediationAction: inform
           severity: high
           object-templates-raw: |
-            {{ printf `{{- $ch := "%s" }}` .Values.global.minOADPChannel }}
+            {{ `{{- $ch := "stable-1.4" }}` }}
+            {{ `{{- $ocp_version := "" }}` }}
+            {{ `{{- $cluster_version := (lookup "config.openshift.io/v1" "ClusterVersion" "" "version")  }}` }}
+            {{ `{{- if eq $cluster_version.metadata.name  "version" }}` }}
+              {{ `{{- range $hist := $cluster_version.status.history}}` }}
+                {{ `{{- $ocp_version = $hist.version }}` }}
+              {{ `{{- end }}` }}
+            {{ `{{- end }}` }}
+            {{ `{{ if or (hasPrefix "4.19" $ocp_version) (hasPrefix "4.2" $ocp_version) }}` }}
+            {{ `{{- $ch = "stable" }}` }}
+            {{ `{{- end }}` }}
             {{ `{{- range $ss := (lookup "operators.coreos.com/v1alpha1" "Subscription" "open-cluster-management-backup" "").items }}` }}
               {{ `{{- if and (eq $ss.spec.name "redhat-oadp-operator") (lt $ss.spec.channel $ch) }}` }}
               - complianceType: musthave
@@ -427,10 +441,10 @@ spec:
           customMessage:
             compliant: |- 
               The redhat-oadp-operator subscription installation does not exist in the open-cluster-management-backup namespace, 
-              or the installed version matches or exceeds the version set by the backup and restore operator Helm chart.
+              or the installed version matches or exceeds the supported version set by the backup and restore operator Helm chart.
             noncompliant: 
               The version of the redhat-oadp-operator operator installed in the open-cluster-management-backup namespace 
-              is lower than the version set by the backup and restore operator Helm chart.
+              is lower than the supported version set by the backup and restore operator Helm chart.
     - objectDefinition:
         apiVersion: policy.open-cluster-management.io/v1
         kind: ConfigurationPolicy

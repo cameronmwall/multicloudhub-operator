@@ -18,7 +18,10 @@ import (
 	promv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	mcev1 "github.com/stolostron/backplane-operator/api/v1"
 	operatorv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
+	"github.com/stolostron/multiclusterhub-operator/pkg/helpers"
 	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengine"
+	"github.com/stolostron/multiclusterhub-operator/pkg/multiclusterengineutils"
+	renderer "github.com/stolostron/multiclusterhub-operator/pkg/rendering"
 	"github.com/stolostron/multiclusterhub-operator/pkg/utils"
 	resources "github.com/stolostron/multiclusterhub-operator/test/unit-tests"
 	searchv2v1alpha1 "github.com/stolostron/search-v2-operator/api/v1alpha1"
@@ -32,6 +35,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networking "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apixv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,6 +75,9 @@ var (
 
 func ApplyPrereqs(k8sClient client.Client) {
 	ctx := context.Background()
+	if err := os.Setenv(helpers.DefaultStorageClassName, "gp3-csi"); err != nil {
+		log.Error(err, "failed to set default storage class")
+	}
 
 	By("Creating Ingress")
 	Expect(k8sClient.Create(ctx, resources.OCPIngress())).Should(Succeed())
@@ -186,7 +193,7 @@ func RunningState(k8sClient client.Client, reconciler *MultiClusterHubReconciler
 
 	By("Ensuring Klusterlet Addon is created")
 	Eventually(func() error {
-		ns := LocalClusterNamespace()
+		ns := LocalClusterNamespace(createdMCH.Spec.LocalClusterName)
 		_, err := reconciler.ensureNamespace(createdMCH, ns)
 		return err
 	}, timeout, interval).Should(Succeed(), "KlusterletAddon should be created")
@@ -226,7 +233,7 @@ func PreexistingMCE(k8sClient client.Client, reconciler *MultiClusterHubReconcil
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "multicluster-engine",
 			Namespace: "multicluster-engine",
-			Labels:    map[string]string{utils.MCEManagedByLabel: "true"},
+			Labels:    map[string]string{multiclusterengineutils.MCEManagedByLabel: "true"},
 		},
 		Spec: &subv1alpha1.SubscriptionSpec{
 			Package: multiclusterengine.DesiredPackage(),
@@ -278,7 +285,7 @@ func PreexistingMCE(k8sClient client.Client, reconciler *MultiClusterHubReconcil
 		if labels == nil {
 			return false
 		}
-		if val, ok := labels[utils.MCEManagedByLabel]; ok && val == "true" {
+		if val, ok := labels[multiclusterengineutils.MCEManagedByLabel]; ok && val == "true" {
 			return true
 		}
 		return false
@@ -1084,6 +1091,7 @@ func registerScheme() {
 	mcev1.AddToScheme(scheme.Scheme)
 	subv1alpha1.AddToScheme(scheme.Scheme)
 	olmv1.AddToScheme(scheme.Scheme)
+	storagev1.AddToScheme(scheme.Scheme)
 }
 
 func Test_ensureAuthenticationIssuerNotEmpty(t *testing.T) {
@@ -1218,16 +1226,74 @@ func Test_ensureInfrastructureAWS(t *testing.T) {
 	}
 }
 
+func Test_verifyCRDExists(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		crd  *apixv1.CustomResourceDefinition
+		want bool
+	}{
+		{
+			name: "Check crd exists and returns true",
+			ctx:  context.TODO(),
+			crd: &apixv1.CustomResourceDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test",
+				},
+			},
+			want: true,
+		},
+		{
+			name: "Check crd does not exist and returns false",
+			ctx:  context.TODO(),
+			crd:  nil,
+			want: false,
+		},
+	}
+	registerScheme()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				recon.Client.Delete(context.TODO(), tt.crd)
+			}()
+
+			recon.Client.Create(context.TODO(), tt.crd)
+			gvk := operatorv1.ResourceGVK{
+				Name: "test",
+			}
+			ok, _ := recon.verifyCRDExists(context.TODO(), gvk)
+			if ok != tt.want {
+				t.Errorf("Got %v, want %v", ok, tt.want)
+			}
+		})
+	}
+}
+
 func Test_equivalentKlusterletAddonConfig(t *testing.T) {
 	grcEnabled := true
+
+	mch := &operatorv1.MultiClusterHub{
+		ObjectMeta: metav1.ObjectMeta{Name: "mch", Namespace: "test-ns-1"},
+		Spec: operatorv1.MultiClusterHubSpec{
+			LocalClusterName: "local-cluster",
+			Overrides: &operatorv1.Overrides{
+				Components: []operatorv1.ComponentConfig{
+					{
+						Name:    operatorv1.GRC,
+						Enabled: true,
+					},
+				},
+			},
+		},
+	}
 
 	match := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "agent.open-cluster-management.io/v1",
 			"kind":       "KlusterletAddonConfig",
 			"metadata": map[string]interface{}{
-				"name":      KlusterletAddonConfigName,
-				"namespace": ManagedClusterName,
+				"name":      mch.Spec.LocalClusterName,
+				"namespace": mch.Spec.LocalClusterName,
 			},
 			"spec": map[string]interface{}{
 				"applicationManager": map[string]interface{}{
@@ -1251,8 +1317,8 @@ func Test_equivalentKlusterletAddonConfig(t *testing.T) {
 			"apiVersion": "agent.open-cluster-management.io/v1",
 			"kind":       "KlusterletAddonConfig",
 			"metadata": map[string]interface{}{
-				"name":      KlusterletAddonConfigName,
-				"namespace": ManagedClusterName,
+				"name":      mch.Spec.LocalClusterName,
+				"namespace": mch.Spec.LocalClusterName,
 			},
 			"spec": map[string]interface{}{
 				"applicationManager": map[string]interface{}{
@@ -1266,20 +1332,6 @@ func Test_equivalentKlusterletAddonConfig(t *testing.T) {
 				},
 				"searchCollector": map[string]interface{}{
 					"enabled": true,
-				},
-			},
-		},
-	}
-
-	mch := &operatorv1.MultiClusterHub{
-		ObjectMeta: metav1.ObjectMeta{Name: "mch", Namespace: "test-ns-1"},
-		Spec: operatorv1.MultiClusterHubSpec{
-			Overrides: &operatorv1.Overrides{
-				Components: []operatorv1.ComponentConfig{
-					{
-						Name:    operatorv1.GRC,
-						Enabled: true,
-					},
 				},
 			},
 		},
@@ -1930,6 +1982,164 @@ func Test_ensureResourceVersionAlignment(t *testing.T) {
 			got := recon.ensureResourceVersionAlignment(tt.template, os.Getenv("OPERATOR_VERSION"))
 			if got != tt.want {
 				t.Errorf("ensureResourceVersionAlignment() = %v, want: %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_SetDefaultStorageClassName(t *testing.T) {
+	allowVolumeExpansion := true
+	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
+	volumeBindingMode := storagev1.VolumeBindingWaitForFirstConsumer
+
+	tests := []struct {
+		name           string
+		mch            *operatorv1.MultiClusterHub
+		storageClasses []storagev1.StorageClass
+		expectedEnv    string
+	}{
+		{
+			name: "should set default storageClassName with MCH annotation",
+			mch: &operatorv1.MultiClusterHub{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "multiclusterhub",
+					Namespace: "test-ns",
+					Annotations: map[string]string{
+						utils.AnnotationDefaultStorageClass: "gp2-csi",
+					},
+				},
+			},
+			storageClasses: []storagev1.StorageClass{},
+			expectedEnv:    "gp2-csi",
+		},
+		{
+			name: "should set default storageClassName when default marked",
+			mch: &operatorv1.MultiClusterHub{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "multiclusterhub",
+					Namespace: "test-ns",
+				},
+			},
+			storageClasses: []storagev1.StorageClass{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "gp2-csi",
+					},
+					Provisioner: "ebs.csi.aws.com",
+					Parameters: map[string]string{
+						"encrypted": "true",
+						"type":      "gp2",
+					},
+					ReclaimPolicy:        &reclaimPolicy,
+					AllowVolumeExpansion: &allowVolumeExpansion,
+					VolumeBindingMode:    &volumeBindingMode,
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "gp3-csi",
+						Annotations: map[string]string{
+							utils.AnnotationKubeDefaultStorageClass: "true",
+						},
+					},
+					Provisioner: "ebs.csi.aws.com",
+					Parameters: map[string]string{
+						"encrypted": "true",
+						"type":      "gp3",
+					},
+					ReclaimPolicy:        &reclaimPolicy,
+					AllowVolumeExpansion: &allowVolumeExpansion,
+					VolumeBindingMode:    &volumeBindingMode,
+				},
+			},
+			expectedEnv: "gp3-csi",
+		},
+	}
+
+	os.Setenv(helpers.DefaultStorageClassName, "test-storage-class")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer os.Unsetenv(helpers.DefaultStorageClassName)
+
+			for _, sc := range tt.storageClasses {
+				if err := recon.Client.Create(context.TODO(), &sc); err != nil {
+					t.Errorf("failed to create StorageClass: %v", err)
+				}
+			}
+
+			// Call the function under test
+			if _, err := recon.SetDefaultStorageClassName(context.TODO(), tt.mch); err != nil {
+				t.Errorf("SetDefaultStorageClassName failed: %v", err)
+			}
+
+			if got := os.Getenv(helpers.DefaultStorageClassName); got != tt.expectedEnv {
+				t.Errorf("Expected StorageClassName to be set to: %v, got: %v", tt.expectedEnv, got)
+			}
+		})
+	}
+}
+
+func Test_ApplyTemplate(t *testing.T) {
+	tests := []struct {
+		name             string
+		chartLocation    string
+		component        string
+		mch              *operatorv1.MultiClusterHub
+		storageClassName string
+		want             error
+	}{
+		{
+			name:             "should apply template for component",
+			chartLocation:    filepath.Join("../pkg/templates/", utils.EdgeManagerChartLocation),
+			component:        operatorv1.EdgeManagerPreview,
+			mch:              &operatorv1.MultiClusterHub{},
+			storageClassName: "gp2-csi",
+			want:             nil,
+		},
+	}
+
+	testImages := map[string]string{}
+	for _, v := range utils.GetTestImages() {
+		testImages[v] = "quay.io/test/test:Test"
+	}
+
+	testCacheSpec := CacheSpec{
+		ImageOverrides:    testImages,
+		TemplateOverrides: map[string]string{},
+	}
+
+	// Renders all templates from charts
+	registerScheme()
+	os.Setenv("ACM_HUB_OCP_VERSION", "4.18.0")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			templates, errs := renderer.RenderChart(tt.chartLocation, tt.mch, testCacheSpec.ImageOverrides,
+				testCacheSpec.TemplateOverrides, false)
+
+			if errs != nil {
+				t.Errorf("Failed to render chart for %v", tt.component)
+			}
+
+			for _, template := range templates {
+				if _, err := recon.applyTemplate(context.TODO(), tt.mch, template); err != nil {
+					t.Errorf("failed: %v", err)
+				}
+			}
+
+			os.Setenv(helpers.DefaultStorageClassName, "gp3-csi")
+			templates, errs = renderer.RenderChart(tt.chartLocation, tt.mch, testCacheSpec.ImageOverrides,
+				testCacheSpec.TemplateOverrides, false)
+
+			if errs != nil {
+				t.Errorf("Failed to render chart for %v", tt.component)
+			}
+
+			for _, template := range templates {
+				if template.GetKind() == "PersistentVolumeClaim" || template.GetKind() == "StatefulSet" {
+					if _, err := recon.applyTemplate(context.TODO(), tt.mch, template); err != nil {
+						t.Errorf("applyTemplate() = %v, want = %v", err, tt.want)
+					}
+				}
 			}
 		})
 	}

@@ -25,11 +25,13 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	promv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	operatorv1 "github.com/stolostron/multiclusterhub-operator/api/v1"
 	"github.com/stolostron/multiclusterhub-operator/pkg/deploying"
+	"github.com/stolostron/multiclusterhub-operator/pkg/helpers"
 	"github.com/stolostron/multiclusterhub-operator/pkg/overrides"
 	"github.com/stolostron/multiclusterhub-operator/pkg/predicate"
 	renderer "github.com/stolostron/multiclusterhub-operator/pkg/rendering"
@@ -48,6 +50,7 @@ import (
 
 	ocopv1 "github.com/openshift/api/operator/v1"
 
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -266,6 +269,15 @@ func (r *MultiClusterHubReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	/*
+		In ACM 2.13, we are required to get the default storage class name for the Edge Manager (aka Flight-Control)
+		component. To ensure that we can pass the default storage class, we will store it as an environment variable.
+	*/
+	if result, err = r.SetDefaultStorageClassName(ctx, multiClusterHub); err != nil {
+		r.Log.Error(err, "failed to set the default StorageClass name")
 		return ctrl.Result{}, err
 	}
 
@@ -495,6 +507,7 @@ ensureAuthenticationIssuerNotEmpty ensures that the Authentication ServiceAccoun
 */
 func (r *MultiClusterHubReconciler) ensureAuthenticationIssuerNotEmpty(ctx context.Context) (ctrl.Result, bool, error) {
 	auth := &configv1.Authentication{}
+
 	exists, err := r.ensureObjectExistsAndNotDeleted(ctx, auth, "cluster")
 
 	if err != nil || !exists {
@@ -516,6 +529,7 @@ ensureCloudCredentialModeManual ensures that the CloudCredential CredentialMode 
 */
 func (r *MultiClusterHubReconciler) ensureCloudCredentialModeManual(ctx context.Context) (ctrl.Result, bool, error) {
 	cloudCred := &ocopv1.CloudCredential{}
+
 	exists, err := r.ensureObjectExistsAndNotDeleted(ctx, cloudCred, "cluster")
 
 	if err != nil || !exists {
@@ -537,6 +551,7 @@ ensureInfrastructureAWS ensures that the infrastructure platform type is AWS.
 */
 func (r *MultiClusterHubReconciler) ensureInfrastructureAWS(ctx context.Context) (ctrl.Result, bool, error) {
 	infra := &configv1.Infrastructure{}
+
 	exists, err := r.ensureObjectExistsAndNotDeleted(ctx, infra, "cluster")
 
 	if err != nil || !exists {
@@ -550,6 +565,28 @@ func (r *MultiClusterHubReconciler) ensureInfrastructureAWS(ctx context.Context)
 			"Type", infra.Spec.PlatformSpec.Type)
 	}
 	return ctrl.Result{}, stsEnabled, nil
+}
+
+/*
+verifyCRDExists checks if the crd exists in the environment
+*/
+func (r *MultiClusterHubReconciler) verifyCRDExists(ctx context.Context, gvk operatorv1.ResourceGVK) (bool, error) {
+	crd := &apixv1.CustomResourceDefinition{}
+
+	// Attempt to find the crd using name
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: gvk.Name}, crd); err != nil {
+		// CRD does not exist, so we can return false and nil
+		if errors.IsNotFound(err) {
+			r.Log.Info("Warning: CRD does not exist", "Name", gvk.Name)
+			return false, nil
+		}
+
+		r.Log.Error(err, "failed to get the CRD", "Name", gvk.Name)
+		return false, err
+	}
+
+	//found crd
+	return true, nil
 }
 
 /*
@@ -577,6 +614,12 @@ func (r *MultiClusterHubReconciler) ensureObjectExistsAndNotDeleted(ctx context.
 isSTSEnabled checks if STS (Security Token Service) is enabled by verifying that all required conditions are met.
 */
 func (r *MultiClusterHubReconciler) isSTSEnabled(ctx context.Context) (bool, error) {
+	for _, crd := range operatorv1.RequiredSTSCRDs {
+		if ok, err := r.verifyCRDExists(ctx, crd); err != nil || !ok {
+			return ok, err
+		}
+	}
+
 	_, authOK, err := r.ensureAuthenticationIssuerNotEmpty(ctx)
 	if err != nil {
 		return false, err
@@ -755,12 +798,13 @@ func (r *MultiClusterHubReconciler) applyTemplate(ctx context.Context, m *operat
 	} else {
 		// Check if the resource exists before creating it.
 		for _, gvk := range operatorv1.MCECRDs {
-			if template.GroupVersionKind().Group == gvk.Group && template.GetKind() == gvk.Kind && template.GroupVersionKind().Version == gvk.Version {
+			if template.GroupVersionKind().Group == gvk.Group && template.GetKind() == gvk.Kind &&
+				template.GroupVersionKind().Version == gvk.Version {
 				crd := &apixv1.CustomResourceDefinition{}
 
 				if err := r.Client.Get(ctx, types.NamespacedName{Name: gvk.Name}, crd); errors.IsNotFound(err) {
 					log.Info("CustomResourceDefinition does not exist. Skipping resource creation",
-						"Group", gvk.Group, "Version", gvk.Version, "Kind", gvk.Kind)
+						"Group", gvk.Group, "Version", gvk.Version, "Kind", gvk.Kind, "Name", template.GetName())
 					return ctrl.Result{RequeueAfter: utils.WarningRefreshInterval}, nil
 
 				} else if err != nil {
@@ -797,12 +841,68 @@ func (r *MultiClusterHubReconciler) applyTemplate(ctx context.Context, m *operat
 				SetHubCondition(&m.Status, *condition)
 			}
 
-			// Resource exists; use the original template for patching to avoid issues with managedFields
-			// Apply the object data.
-			force := true
-			if err := r.Client.Patch(ctx, template, client.Apply, &client.PatchOptions{
-				Force: &force, FieldManager: "multiclusterhub-operator"}); err != nil {
-				return r.logAndSetCondition(err, "failed to update resource", template, m)
+			/*
+				In ACM 2.13 we are applying a PersistentVolumeClaim (PVC) and StatefulSet (STS) for Edge Manager.
+				When the PVC is created, we cannot patch the resource if there is a new storageClass available.
+				The user would need to delete the pre-existing PVC and allow MCH to recreate a new version with the
+				latest default storageClass version.
+			*/
+			if existing.GetKind() == "PersistentVolumeClaim" {
+				storageClassName, found, err := unstructured.NestedString(existing.Object, "spec", "storageClassName")
+				if err != nil {
+					log.Error(err, "failed to retrieve storageClassName from PVC", "Name", existing.GetName())
+					return ctrl.Result{}, err
+				}
+
+				if found && storageClassName != os.Getenv(helpers.DefaultStorageClassName) {
+					log.Info(
+						"To update the PVC with a new StorageClass, delete the existing PVC to allow it to be recreated.",
+						"Name", existing.GetName(), "CurrentStorageClass", storageClassName,
+						"NewStorageClass", os.Getenv(helpers.DefaultStorageClassName))
+					return ctrl.Result{}, nil
+				}
+			} else if existing.GetKind() == "StatefulSet" {
+				volumeClaimTemplates, found, err := unstructured.NestedSlice(existing.Object, "spec",
+					"volumeClaimTemplates")
+
+				if err != nil {
+					log.Error(err, "failed to retrieve volumeClaimTemplates from StatefulSet", "Name",
+						existing.GetName())
+					return ctrl.Result{}, err
+				}
+
+				if found {
+					// Loop through each volumeClaimTemplate to verify that the storage class name remains unchanged.
+					for i, volumeClaimTemplate := range volumeClaimTemplates {
+						// Extract the storageClassName from each volumeClaimTemplate
+						storageClassName, found, err := unstructured.NestedString(
+							volumeClaimTemplate.(map[string]interface{}), "spec", "storageClassName")
+
+						if err != nil {
+							log.Error(err, "failed to retrieve storageClassName from volumeClaimTemplate", "Index", i,
+								"Name", existing.GetName())
+							return ctrl.Result{}, err
+						}
+
+						if found && storageClassName != os.Getenv(helpers.DefaultStorageClassName) {
+							log.Info(
+								"To update the STS with a new StorageClass, delete the existing STS to allow it to be recreated.",
+								"Name", existing.GetName(), "CurrentStorageClass", storageClassName,
+								"NewStorageClass", os.Getenv(helpers.DefaultStorageClassName))
+							return ctrl.Result{}, nil
+						}
+					}
+				}
+			}
+
+			if !utils.IsTemplateAnnotationTrue(template, utils.AnnotationEditable) {
+				// Resource exists; use the original template for patching to avoid issues with managedFields
+				// Apply the object data.
+				force := true
+				if err := r.Client.Patch(ctx, template, client.Apply, &client.PatchOptions{
+					Force: &force, FieldManager: "multiclusterhub-operator"}); err != nil {
+					return r.logAndSetCondition(err, "failed to update resource", template, m)
+				}
 			}
 		}
 	}
@@ -827,6 +927,12 @@ func (r *MultiClusterHubReconciler) fetchChartLocation(component string) string 
 	case operatorv1.Console:
 		return utils.ConsoleChartLocation
 
+	case operatorv1.EdgeManagerPreview:
+		return utils.EdgeManagerChartLocation
+
+	case operatorv1.FineGrainedRbacPreview:
+		return utils.FineGrainedRbacChartLocation
+
 	case operatorv1.GRC:
 		return utils.GRCChartLocation
 
@@ -842,6 +948,9 @@ func (r *MultiClusterHubReconciler) fetchChartLocation(component string) string 
 	case operatorv1.Search:
 		return utils.SearchV2ChartLocation
 
+	case operatorv1.MTVIntegrationsPreview:
+		return utils.MTVIntegrationsChartLocation
+
 	case operatorv1.SiteConfig:
 		return utils.SiteConfigChartLocation
 
@@ -850,9 +959,6 @@ func (r *MultiClusterHubReconciler) fetchChartLocation(component string) string 
 
 	case operatorv1.Volsync:
 		return utils.VolsyncChartLocation
-
-	case operatorv1.FlightControl:
-		return utils.FlightControlChartLocation
 
 	default:
 		log.Info(fmt.Sprintf("Unregistered component detected: %v", component))
@@ -873,6 +979,14 @@ func (r *MultiClusterHubReconciler) ensureComponentOrNoComponent(ctx context.Con
 			}
 			return r.ensureNoNamespace(m, BackupNamespaceUnstructured())
 		}
+		if component == operatorv1.EdgeManagerPreview {
+			result, err := r.ensureNoComponent(ctx, m, component, cachespec, isSTSEnabled)
+			if result != (ctrl.Result{}) || err != nil {
+				return result, err
+			}
+			return r.deleteEdgeManagerResources(ctx, m)
+		}
+
 		return r.ensureNoComponent(ctx, m, component, cachespec, isSTSEnabled)
 
 	} else {
@@ -1213,6 +1327,71 @@ func (r *MultiClusterHubReconciler) ensureNoInternalHubComponent(ctx context.Con
 	return ctrl.Result{RequeueAfter: resyncPeriod}, nil
 }
 
+func (r *MultiClusterHubReconciler) GetDefaultStorageClassName(storageClasses storagev1.StorageClassList) string {
+	for _, sc := range storageClasses.Items {
+		if annotations := sc.GetAnnotations(); annotations != nil {
+			if strings.EqualFold(annotations[utils.AnnotationKubeDefaultStorageClass], "true") {
+				return sc.GetName()
+			}
+		}
+	}
+
+	if len(storageClasses.Items) > 1 {
+		log.Info("Warning: Multiple non-default storage classes found. A default storage class needs to be declared.")
+	}
+	return ""
+}
+
+func (r *MultiClusterHubReconciler) SetDefaultStorageClassName(ctx context.Context, m *operatorv1.MultiClusterHub) (
+	ctrl.Result, error) {
+
+	// Retrieve the default storage class name from the environment variable, if set.
+	envStorageClass := os.Getenv(helpers.DefaultStorageClassName)
+
+	/*
+	   Check if the MultiClusterHub instance contains a default storage class annotation.
+	   If the annotation is present and different from the environment variable, override it.
+	*/
+	if overrideStorageClass := utils.GetDefaultStorageClassOverride(m); overrideStorageClass != "" &&
+		overrideStorageClass != envStorageClass {
+
+		if err := os.Setenv(helpers.DefaultStorageClassName, overrideStorageClass); err != nil {
+			log.Error(err, "unable to set the default StorageClass environment variable from annotation",
+				helpers.DefaultStorageClassName, overrideStorageClass)
+
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Applied default StorageClass annotation override",
+			"StorageClassName", overrideStorageClass)
+		return ctrl.Result{}, nil
+	}
+
+	// If no annotation override is found, we need to discover the default storage class from the cluster.
+	storageClasses := storagev1.StorageClassList{}
+	if err := r.Client.List(ctx, &storageClasses); err != nil {
+		if errors.IsNotFound(err) {
+			r.Log.Info("No StorageClass resources found in the cluster. Skipping default StorageClass update")
+			return ctrl.Result{}, nil
+		}
+
+		r.Log.Error(err, "failed to list StorageClass resources")
+		return ctrl.Result{}, err
+	}
+
+	// Retrieve the default storage class from the cluster's StorageClass resources.
+	if defaultStorageClass := r.GetDefaultStorageClassName(storageClasses); defaultStorageClass != "" &&
+		defaultStorageClass != envStorageClass {
+		if err := os.Setenv(helpers.DefaultStorageClassName, defaultStorageClass); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Default StorageClassName set from cluster resources",
+			"Name", defaultStorageClass)
+	}
+	return ctrl.Result{}, nil
+}
+
 func (r *MultiClusterHubReconciler) ensureOpenShiftNamespaceLabel(ctx context.Context, m *operatorv1.MultiClusterHub) (
 	ctrl.Result, error,
 ) {
@@ -1492,10 +1671,8 @@ func (r *MultiClusterHubReconciler) ingressDomain(
 }
 
 // ingressDomain is discovered from Openshift cluster configuration resources
-func (r *MultiClusterHubReconciler) openShiftApiUrl(
-	ctx context.Context,
-	m *operatorv1.MultiClusterHub,
-) (ctrl.Result, error) {
+func (r *MultiClusterHubReconciler) openShiftApiUrl(ctx context.Context, m *operatorv1.MultiClusterHub) (
+	ctrl.Result, error) {
 	infrastructure := &configv1.Infrastructure{}
 	err := r.Client.Get(ctx, types.NamespacedName{
 		Name: "cluster",
@@ -1543,6 +1720,11 @@ func (r *MultiClusterHubReconciler) finalizeHub(reqLogger logr.Logger, m *operat
 		if err := cleanupFn(reqLogger, m); err != nil {
 			return err
 		}
+	}
+
+	_, err := r.deleteEdgeManagerResources(context.Background(), m)
+	if err != nil {
+		return err
 	}
 
 	reqLogger.Info("Successfully finalized multiClusterHub")
@@ -1819,7 +2001,7 @@ func (r *MultiClusterHubReconciler) ensureResourceVersionAlignment(template *uns
 
 	if currentVersion != desiredVersion {
 		log.Info("Resource version mismatch detected; attempting to update resource",
-			"Kind", template.GetName(), "Name", template.GetKind(),
+			"Kind", template.GetKind(), "Name", template.GetName(),
 			"CurrentVersion", currentVersion, "DesiredVersion", desiredVersion)
 
 		return false
@@ -1832,7 +2014,7 @@ func (r *MultiClusterHubReconciler) logAndSetCondition(err error, message string
 	template *unstructured.Unstructured, m *operatorv1.MultiClusterHub) (ctrl.Result, error) {
 
 	log.Error(err, message, "Kind", template.GetKind(), "Name", template.GetName())
-	wrappedError := pkgerrors.Wrapf(err, "%s Kind: %s Name: %s", message, template.GetName(), template.GetKind())
+	wrappedError := pkgerrors.Wrapf(err, "%s Kind: %s Name: %s", message, template.GetKind(), template.GetName())
 
 	condType := fmt.Sprintf("%v: %v (Kind:%v)", operatorv1.ComponentFailure, template.GetName(),
 		template.GetKind())

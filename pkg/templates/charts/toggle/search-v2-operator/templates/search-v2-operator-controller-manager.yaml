@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: search-v2-operator-controller-manager
+  namespace: '{{ .Values.global.namespace }}'
 spec:
   replicas: 1
   selector:
@@ -60,11 +61,8 @@ spec:
           name: https
           protocol: TCP
         resources:
-          limits:
-            cpu: 200m
-            memory: 1Gi
           requests:
-            cpu: 100m
+            cpu: 10m
             memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
@@ -73,6 +71,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
       - args:
         - --health-probe-bind-address=:8081
         - --metrics-bind-address=127.0.0.1:8080
@@ -116,11 +115,8 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
         resources:
-          limits:
-            cpu: 200m
-            memory: 6Gi
           requests:
-            cpu: 50m
+            cpu: 10m
             memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
@@ -129,6 +125,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
       hostIPC: false
       hostNetwork: false
       hostPID: false

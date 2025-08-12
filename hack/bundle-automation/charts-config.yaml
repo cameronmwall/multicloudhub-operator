@@ -1,22 +1,57 @@
-- repo_name: "flight-control"
-  github_ref: "https://github.com/flightctl/flightctl.git"
-  branch: "main"
-  charts:
-    - name: "flight-control"
-      chart-path: "deploy/helm/flightctl"
-      always-or-toggle: "toggle"
-      imageMappings:
-        flightctl-worker: flightctl_worker
-        flightctl-periodic: flightctl_periodic
-        flightctl-api: flightctl_api
-        flightctl-ui: flightctl_ui
-        flightctl-ocp-ui: flightctl_ocp_ui
-        postgresql-12-c8s: postgresql_16
-      inclusions:
-        - "pullSecretOverride"
-      skipRBACOverrides: true
-      updateChartVersion: false # the chart version will be retrieved from trimmed branch name, e.g. backplane-2.4 -> 2.4
-      escape-template-variables:
-
-
-
+acm-release-version: '2.15'
+components:
+  - repo_name: "flight-control"
+    github_ref: "https://github.com/flightctl/flightctl.git"
+    branch: "release-0.7"
+    charts:
+      - name: "flight-control"
+        chart-path: "deploy/helm/flightctl"
+        always-or-toggle: "toggle"
+        imageMappings:
+          # These images will be required when we update to the newest version of flightctl
+          # alertmanager: alertmanager
+          # flightctl-alertmanager-proxy: flightctl_alertmanager_proxy
+          # flightctl-alert-exporter: flightctl_alert_exporter
+          flightctl-api: flightctl_api
+          flightctl-cli-artifacts: flightctl_cli_artifacts
+          flightctl-ocp-ui: flightctl_ocp_ui
+          flightctl-periodic: flightctl_periodic
+          flightctl-ui: flightctl_ui
+          flightctl-worker: flightctl_worker
+          origin-cli: origin_cli
+          postgresql-16-c9s: postgresql_16
+          redis-7-c9s: redis_7_c9s
+        inclusions:
+          - "pullSecretOverride"
+        escape-template-variables: []
+        updateChartVersion: false # the chart version will be retrieved from trimmed branch name, e.g. backplane-2.4 -> 2.4
+        security-context-constraints:
+          - kind: "Deployment"
+            name: flightctl-db
+            containers:
+              - name: flightctl-db
+                readOnlyRootFilesystem: false
+          - kind: "Deployment"
+            name: flightctl-cli-artifacts
+            containers:
+              - name: flightctl-cli-artifacts
+                readOnlyRootFilesystem: false
+        skipRBACOverrides: true
+  - repo_name: "mtv-integrations"
+    github_ref: "https://github.com/stolostron/mtv-integrations.git"
+    branch: "release-2.15"
+    charts:
+      - name: "mtv-integrations"
+        chart-path: "charts"
+        always-or-toggle: "toggle"
+        imageMappings:
+          mtv-integrations: mtv_integrations_controller
+        inclusions:
+          - "pullSecretOverride"
+        skipRBACOverrides: true
+        updateChartVersion: true # the chart version will be retrieved from trimmed branch name, e.g. backplane-2.6 -> 2.6
+        escape-template-variables:
+          - "CLUSTER_NAME"
+          - "HUB_KUBECONFIG"
+          - "INSTALL_NAMESPACE"
+        auto-install-for-all-clusters: true

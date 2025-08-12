@@ -50,9 +50,6 @@ const (
 	// ClusterSubscriptionNamespace is the namespace for the open-cluster-management-backup subscription.
 	ClusterSubscriptionNamespace = "open-cluster-management-backup"
 
-	// MCEManagedByLabel is the label used to mark resources managed by Multicluster Hub.
-	MCEManagedByLabel = "multiclusterhubs.operator.open-cluster-management.io/managed-by"
-
 	// OpenShiftClusterMonitoringLabel is the label for OpenShift cluster monitoring.
 	OpenShiftClusterMonitoringLabel = "openshift.io/cluster-monitoring"
 
@@ -83,6 +80,9 @@ const (
 	// SearchV2ChartLocation is the location of the Search V2 Operator chart.
 	SearchV2ChartLocation = "/charts/toggle/search-v2-operator"
 
+	// MTVIntegrationsChartLocation is the location of the MTV Integrations charts.
+	MTVIntegrationsChartLocation = "/charts/toggle/mtv-integrations"
+
 	// SiteConfigChartLocation is the location of the SiteConfig Operator chart.
 	SiteConfigChartLocation = "/charts/toggle/siteconfig-operator"
 
@@ -92,8 +92,11 @@ const (
 	// VolsyncChartLocation is the location of the Volsync Controller chart.
 	VolsyncChartLocation = "/charts/toggle/volsync-controller"
 
-	// FlightControlChartLocation is the location of the Flight Control Controller chart.
-	FlightControlChartLocation = "/charts/toggle/flight-control"
+	// EdgeManagerChartLocation is the location of the Edge Manager Controller chart.
+	EdgeManagerChartLocation = "/charts/toggle/flight-control"
+
+	// FineGrainedRbacChartLocation is the location of the Fine Grained RBAC chart.
+	FineGrainedRbacChartLocation = "/charts/toggle/fine-grained-rbac"
 )
 
 const (
@@ -337,10 +340,11 @@ func GetTestImages() []string {
 		"klusterlet_addon_controller", "governance_policy_propagator", "governance_policy_addon_controller",
 		"cert_policy_controller", "config_policy_controller", "governance_policy_framework_addon",
 		"cluster_backup_controller", "console", "volsync_addon_controller", "multicluster_operators_application",
-		"multicloud_integrations", "multicluster_operators_channel", "multicluster_operators_subscription",
+		"multicloud_integrations", "mtv_integrations_controller", "multicluster_operators_channel", "multicluster_operators_subscription",
 		"multicluster_observability_operator", "cluster_permission", "siteconfig_operator", "submariner_addon", "acm_cli",
 		"flightctl_worker", "flightctl_periodic", "flightctl_api", "flightctl_ui", "flightctl_ocp_ui",
-		"postgresql_12_c8s", "postgresql_12", "postgresql_16",
+		"flightctl_cli_artifacts", "postgresql_12_c8s", "postgresql_12", "postgresql_16", "origin_cli", "redis_7_c9s",
+		"alertmanager", "flightctl_alertmanager_proxy", "flightctl_alert_exporter",
 	}
 }
 
@@ -405,10 +409,6 @@ func GetDeployments(m *operatorsv1.MultiClusterHub) []types.NamespacedName {
 		nn = append(nn, types.NamespacedName{Name: "cluster-backup-chart-clusterbackup", Namespace: ClusterSubscriptionNamespace})
 		nn = append(nn, types.NamespacedName{Name: "openshift-adp-controller-manager", Namespace: ClusterSubscriptionNamespace})
 	}
-	// community, _ := operatorsv1.IsCommunity()
-	// if community {
-	//  nn = append(nn, types.NamespacedName{Name: "search-v2-operator-controller-manager", Namespace: m.Namespace})
-	// }
 	return nn
 }
 
@@ -468,6 +468,13 @@ func GetDeploymentsForStatus(m *operatorsv1.MultiClusterHub, ocpConsole, isSTSEn
 	}
 	if m.Enabled(operatorsv1.ClusterPermission) {
 		nn = append(nn, types.NamespacedName{Name: "cluster-permission", Namespace: m.Namespace})
+	}
+	if m.Enabled(operatorsv1.EdgeManagerPreview) {
+		nn = append(nn, types.NamespacedName{Name: "flightctl-api", Namespace: m.Namespace})
+		nn = append(nn, types.NamespacedName{Name: "flightctl-db", Namespace: m.Namespace})
+		nn = append(nn, types.NamespacedName{Name: "flightctl-ui", Namespace: m.Namespace})
+		nn = append(nn, types.NamespacedName{Name: "flightctl-periodic", Namespace: m.Namespace})
+		nn = append(nn, types.NamespacedName{Name: "flightctl-worker", Namespace: m.Namespace})
 	}
 	return nn
 }
@@ -534,20 +541,24 @@ func appendIfMissing(slice []corev1.EnvVar, s corev1.EnvVar) []corev1.EnvVar {
 // SetDefaultComponents returns true if changes are made
 func SetDefaultComponents(m *operatorsv1.MultiClusterHub) (bool, error) {
 	updated := false
+
 	defaultEnabledComponents, err := operatorsv1.GetDefaultEnabledComponents()
 	if err != nil {
 		return updated, err
 	}
+
 	defaultDisabledComponents, err := operatorsv1.GetDefaultDisabledComponents()
 	if err != nil {
 		return true, err
 	}
+
 	for _, c := range defaultEnabledComponents {
 		if !m.ComponentPresent(c) {
 			m.Enable(c)
 			updated = true
 		}
 	}
+
 	for _, c := range defaultDisabledComponents {
 		if !m.ComponentPresent(c) {
 			m.Disable(c)

@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: multicluster-observability-operator
+  namespace: '{{ .Values.global.namespace }}'
 spec:
   replicas: 1
   selector:
@@ -100,9 +101,6 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
         resources:
-          limits:
-            cpu: 600m
-            memory: 3Gi
           requests:
             cpu: 100m
             memory: 128Mi
@@ -113,6 +111,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
         volumeMounts:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: cert
