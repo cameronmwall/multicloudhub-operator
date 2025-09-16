@@ -15,6 +15,7 @@ global:
     postgresql_16: ''
     prometheus_alertmanager: ''
     redis_7_c9s: ''
+    ubi_minimal: ''
   namespace: default
   pullSecret: null
   templateOverrides: {}
