@@ -12,6 +12,7 @@ components:
           flightctl-alertmanager-proxy: flightctl_alertmanager_proxy
           flightctl-alert-exporter: flightctl_alert_exporter
           flightctl-db-setup: flightctl_db_setup
+          flightctl_db_setup: flightctl_db_setup
           flightctl-api: flightctl_api
           lightctl-userinfo-proxy: flightctl_userinfo_proxy
           flightctl-cli-artifacts: flightctl_cli_artifacts
@@ -31,6 +32,13 @@ components:
             name: flightctl-db
             containers:
               - name: flightctl-db
+                readOnlyRootFilesystem: false
+          - kind: "Job"
+            name: flightctl-db-migration-1
+            containers:
+              - name: setup-database-users
+                readOnlyRootFilesystem: false
+              - name: run-migrations
                 readOnlyRootFilesystem: false
           - kind: "Deployment"
             name: flightctl-cli-artifacts
